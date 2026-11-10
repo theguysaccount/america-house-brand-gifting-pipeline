@@ -1,11 +1,11 @@
-_site/
-__pycache__/
+!.env.example
 *.pyc
+*.tmp
 .DS_Store
+.cache/
+.claude/
 .env
 .env.*
-!.env.example
-.claude/
-*.tmp
-.cache/
+__pycache__/
+_site/
 prev-urls.txt

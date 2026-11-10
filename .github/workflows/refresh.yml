@@ -11,6 +11,7 @@ on:
   schedule:
     - cron: "23 5 * * 2"   # Tuesday 05:23 UTC
     - cron: "37 5 * * 5"   # Friday 05:37 UTC: the backstop
+    - cron: "13,33,53 * * * *"   # TEMPORARY: proves the schedule trigger end to end; removed after one passing run
   push:
     branches: [main]
     paths-ignore: ["data/**", "**.md", "docs/**", "LICENSE", ".github/ISSUE_TEMPLATE/**"]
@@ -52,6 +53,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    outputs:
+      indexnow: ${{ steps.ping.outputs.indexnow }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -80,6 +83,17 @@ jobs:
 
       - name: Browser check (headless Chrome against the build)
         run: python3 -m directory.e2e _site
+
+      - name: Decide whether search engines need telling
+        id: ping
+        run: |
+          # Always after a push or a manual run; on schedule only when the data or the page list changed.
+          curl -fsS "$SITE_URL/urls.txt" -o prev-urls.txt || : > prev-urls.txt
+          if [ "$GITHUB_EVENT_NAME" != "schedule" ] || ! cmp -s prev-urls.txt _site/urls.txt || [ -n "$(git status --porcelain data)" ]; then
+            echo "indexnow=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "indexnow=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Commit the data snapshot
         if: github.event_name != 'push'
@@ -124,7 +138,7 @@ jobs:
         uses: actions/deploy-pages@v5
 
   after:
-    needs: deploy
+    needs: [build, deploy]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -144,5 +158,5 @@ jobs:
           done
           exit 1
       - name: Tell IndexNow (never fails the run)
-        if: always()
+        if: always() && needs.build.outputs.indexnow == 'true'
         run: python3 -m directory.indexnow --urls urls/urls.txt || true

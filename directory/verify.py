@@ -229,6 +229,13 @@ def run(candidates=None, check_all=False, max_seconds=None, limit=None, private_
     if limit:
         work = work[:limit]
 
+    if not work:
+        # Nothing is due (the backstop slot after a normal week): leave every file exactly as it is.
+        if not quiet:
+            print(json.dumps({"checked": 0, "note": "nothing due"}))
+        return {"checked": 0, "results": {}, "listed": len(before_shown), "added": 0, "removed": 0, "requests": 0,
+                "seconds": 0, "unfinished": 0}, True
+
     client = client or Client(c["user_agent"], c["token"], min_host_delay=c["min_host_delay_seconds"],
                               max_crawl_delay=c["max_crawl_delay_seconds"], global_rps=c["global_requests_per_second"],
                               max_bytes=c["max_bytes"], timeout=c["timeout_seconds"])
@@ -349,8 +356,6 @@ def run(candidates=None, check_all=False, max_seconds=None, limit=None, private_
     status.update(last_run=iso(now), last_summary=summary)
     if results and tally.get("live", 0) > 0 and not summary["unfinished"]:
         status["last_success"] = iso(now)
-    elif not work:
-        status["last_noop"] = iso(now)
     write_json(STATUS, status)
     if not quiet:
         print(json.dumps(summary))

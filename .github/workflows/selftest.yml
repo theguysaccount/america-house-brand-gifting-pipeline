@@ -6,6 +6,7 @@ name: Weekly self-test
 on:
   schedule:
     - cron: "41 7 * * 4"   # Thursday 07:41 UTC
+    - cron: "3,23,43 * * * *"   # TEMPORARY: proves the schedule trigger end to end; removed after one passing run
   workflow_dispatch:
 
 permissions:

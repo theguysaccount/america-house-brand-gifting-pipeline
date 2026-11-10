@@ -81,9 +81,14 @@ class VerifyTest(unittest.TestCase):
 
     def test_recent_listings_are_not_fetched_again_and_a_rerun_is_a_no_op(self):
         self.run_at(0, candidates=self.urls)
+        def snapshot():
+            return {k: open(getattr(verify, k)).read() for k in ("PROGRAMS", "DROPPED", "CHANGES", "STATUS")}
+
+        before = snapshot()
         _, ok, client = self.run_at(2)
         self.assertTrue(ok)
         self.assertEqual(client.asked, [], "nothing is due two days after a full check")
+        self.assertEqual(snapshot(), before, "a run with nothing due changes no file, so it makes no commit")
         _, _, client = self.run_at(7)
         self.assertEqual(len([u for u in client.asked if u.endswith("ambassador-program")]), len(self.urls))
 
