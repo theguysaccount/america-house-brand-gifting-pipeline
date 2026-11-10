@@ -1,0 +1,21 @@
+{
+  "name": "Creator Program Directory",
+  "tagline": "Brands with open ambassador, creator, affiliate and gifting applications, re-checked every week.",
+  "repo": "theguysaccount/america-house-brand-gifting-pipeline",
+  "default_url": "https://theguysaccount.github.io/america-house-brand-gifting-pipeline",
+  "indexable": true,
+  "crawler": {
+    "token": "CreatorProgramDirectoryBot",
+    "user_agent": "CreatorProgramDirectoryBot/1.0 (+https://github.com/theguysaccount/america-house-brand-gifting-pipeline)",
+    "min_host_delay_seconds": 3,
+    "max_crawl_delay_seconds": 30,
+    "global_requests_per_second": 2.5,
+    "workers": 6,
+    "max_bytes": 2000000,
+    "timeout_seconds": 25,
+    "recheck_after_days": 5,
+    "strikes_before_drop": 2
+  },
+  "min_listings_to_publish": 50,
+  "max_drop_share": 0.4
+}
