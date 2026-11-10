@@ -69,3 +69,15 @@ def slugify(s):
 def human_date(dt):
     """'November 10, 2026' (no zero padding, same on every platform)."""
     return f"{dt.strftime('%B')} {dt.day}, {dt.year}"
+
+
+_TWO_LEVEL = {"co.uk", "org.uk", "com.au", "net.au", "org.au", "co.nz", "co.za", "com.br", "co.in", "co.jp", "com.sg",
+              "com.mx", "com.hk", "co.il", "com.my", "com.ph", "com.tr", "com.pk", "co.kr", "com.tw", "com.co", "com.ar"}
+
+
+def site_key(host):
+    """Registrable-domain approximation: 'shop.brand.co.uk' -> 'brand.co.uk'."""
+    labels = (host or "").lower().strip(".").split(".")
+    if len(labels) >= 3 and ".".join(labels[-2:]) in _TWO_LEVEL:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])

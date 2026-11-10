@@ -1,0 +1,148 @@
+# Twice a week: re-check every listed program page on the public web, rebuild the site, test it,
+# publish it, commit the data snapshot and tell IndexNow.
+#
+# Safe to re-run at any time: a run only re-checks listings whose last check is five or more days
+# old, so the second weekly slot does nothing unless GitHub skipped the first.
+# Fails safe: a refused crawl, a failed test, guard or browser check stops before deploy, and the
+# last good site stays live.
+name: Verify and deploy
+
+on:
+  schedule:
+    - cron: "23 5 * * 2"   # Tuesday 05:23 UTC
+    - cron: "37 5 * * 5"   # Friday 05:37 UTC: the backstop
+  push:
+    branches: [main]
+    paths-ignore: ["data/**", "**.md", "docs/**", "LICENSE", ".github/ISSUE_TEMPLATE/**"]
+  workflow_dispatch:
+    inputs:
+      crawl:
+        description: Re-check listings before building (off = rebuild and deploy only)
+        type: boolean
+        default: true
+      all:
+        description: Re-check every listing now, not only those due
+        type: boolean
+        default: false
+      limit:
+        description: Check at most this many pages (blank = no limit)
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  actions: write
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+env:
+  # The one base-URL setting. Set the repository variable SITE_URL when a custom domain goes live.
+  SITE_URL: ${{ vars.SITE_URL || format('https://{0}.github.io/{1}', github.repository_owner, github.event.repository.name) }}
+  SITE_INDEXABLE: ${{ vars.SITE_INDEXABLE }}   # set to "false" to stage the site (noindex, no sitemap, no IndexNow)
+  GOATCOUNTER_URL: ${{ vars.GOATCOUNTER_URL }}   # optional: https://<code>.goatcounter.com/count
+  SPONSOR_URL: ${{ vars.SPONSOR_URL }}           # optional: the one labelled sponsor slot
+  SPONSOR_LABEL: ${{ vars.SPONSOR_LABEL }}
+  SPONSOR_TEXT: ${{ vars.SPONSOR_TEXT }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Re-check listings on the public web (robots.txt obeyed, one page per site)
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.crawl)
+        env:
+          LIMIT: ${{ inputs.limit }}
+        run: |
+          case "$LIMIT" in ''|*[!0-9]*) LIMIT_ARG="" ;; *) LIMIT_ARG="--limit $LIMIT" ;; esac
+          python3 -m directory.verify ${{ inputs.all && '--all' || '' }} $LIMIT_ARG --max-seconds 3000
+
+      - name: Tests
+        run: python3 -m unittest discover -s tests -t .
+
+      - name: Build the site
+        run: python3 -m directory.build --site _site
+
+      - name: Share cards
+        run: python3 -m directory.og --site _site
+
+      - name: Guard the build
+        run: python3 -m directory.guard _site
+
+      - name: Browser check (headless Chrome against the build)
+        run: python3 -m directory.e2e _site
+
+      - name: Commit the data snapshot
+        if: github.event_name != 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then echo "No data changes."; exit 0; fi
+          git commit -q -m "data: weekly check $(date -u +%Y-%m-%d)"
+          for i in 1 2 3; do
+            if git pull -q --rebase origin main && git push -q origin HEAD:main; then exit 0; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 5))
+          done
+          echo "::warning::Could not push the data snapshot; the next run will check again."
+
+      - name: Keep the schedules alive
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/keepalive.sh refresh.yml selftest.yml
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: urls
+          path: _site/urls.txt
+          retention-days: 7
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
+
+  after:
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v8
+        with:
+          name: urls
+          path: urls
+      - name: Check the live site
+        run: |
+          for i in 1 2 3 4 5; do
+            if python3 -m directory.selftest --site-url "$SITE_URL"; then exit 0; fi
+            echo "Live site not consistent yet; retrying in 30 s"; sleep 30
+          done
+          exit 1
+      - name: Tell IndexNow (never fails the run)
+        if: always()
+        run: python3 -m directory.indexnow --urls urls/urls.txt || true

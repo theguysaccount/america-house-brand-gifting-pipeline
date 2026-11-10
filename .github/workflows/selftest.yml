@@ -1,0 +1,52 @@
+# Weekly: run the tests, check the live site page by page, and make sure the listings are fresh.
+# If the listings are stale (GitHub skipped the scheduled checks), start "Verify and deploy".
+# Reads only this project's own site. A failure emails the repository owner; it never changes the site.
+name: Weekly self-test
+
+on:
+  schedule:
+    - cron: "41 7 * * 4"   # Thursday 07:41 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  SITE_URL: ${{ vars.SITE_URL || format('https://{0}.github.io/{1}', github.repository_owner, github.event.repository.name) }}
+  SITE_INDEXABLE: ${{ vars.SITE_INDEXABLE }}   # set to "false" to stage the site (noindex, no sitemap, no IndexNow)
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Tests
+        run: python3 -m unittest discover -s tests -t . -v
+      - name: Live site, page by page, and freshness
+        id: live
+        run: |
+          set +e
+          python3 -m directory.selftest --site-url "$SITE_URL" | tee selftest.log
+          code=${PIPESTATUS[0]}
+          grep -q '^stale=true' selftest.log && echo "stale=true" >> "$GITHUB_OUTPUT"
+          exit $code
+      - name: Start a refresh if the listings are stale
+        if: always() && steps.live.outputs.stale == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          busy=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow refresh.yml --limit 5 --json status -q '[.[] | select(.status != "completed")] | length')
+          if [ "$busy" = "0" ]; then
+            gh workflow run refresh.yml --repo "$GITHUB_REPOSITORY" --ref main
+            echo "::warning::Listings were stale; started Verify and deploy."
+          fi
+      - name: Keep the schedules alive
+        if: always() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/keepalive.sh refresh.yml selftest.yml

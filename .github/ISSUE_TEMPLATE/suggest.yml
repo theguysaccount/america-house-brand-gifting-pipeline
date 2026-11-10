@@ -1,0 +1,18 @@
+name: Suggest a program page
+description: Know a brand that publishes an open ambassador, creator or affiliate application page?
+title: "Suggest: "
+labels: ["suggestion"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. Suggestions are reviewed, then checked by the same crawler as every other listing: the page must be on
+        the brand's own website, name a creator, ambassador, affiliate or gifting program, and show a way
+        to apply. Pages that ask people to pay to join are not listed.
+  - type: input
+    id: url
+    attributes:
+      label: Address of the brand's program page
+      placeholder: https://brand.example/pages/ambassadors
+    validations:
+      required: true

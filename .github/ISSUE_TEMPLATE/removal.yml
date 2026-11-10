@@ -1,0 +1,39 @@
+name: Correct or remove a listing
+description: For brands. Ask for a listing to be corrected or taken down.
+title: "Listing: "
+labels: ["listing"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The fastest way to remove your page is to add these two lines to your site's `robots.txt`.
+        The listing then disappears at the next weekly check, with no review needed:
+
+        ```
+        User-agent: CreatorProgramDirectoryBot
+        Disallow: /
+        ```
+
+        A `noindex` robots meta tag on the page works too. If you would rather ask here, fill this in.
+        Please do not include personal data.
+  - type: input
+    id: url
+    attributes:
+      label: Address of the listed page
+      placeholder: https://your-brand.example/pages/ambassadors
+    validations:
+      required: true
+  - type: dropdown
+    id: ask
+    attributes:
+      label: What should change?
+      options:
+        - Remove the listing
+        - Correct a detail
+    validations:
+      required: true
+  - type: textarea
+    id: detail
+    attributes:
+      label: Details
+      description: For a correction, say what is wrong and what the page actually says.

@@ -30,31 +30,24 @@ from datetime import timedelta
 from urllib.parse import urlsplit, urlunsplit
 
 from . import classify
-from .common import DATA, iso, load_config, now_utc, parse_iso, read_json, slugify, write_json
+from .common import DATA, iso, load_config, now_utc, parse_iso, read_json, site_key, slugify, write_json
 from .fetch import Client, FetchError
 
 PROGRAMS = os.path.join(DATA, "programs.json")
+QUEUE = os.path.join(DATA, "candidates.txt")          # public queue of new pages to try, one URL per line
 DROPPED = os.path.join(DATA, "dropped.json")
 CHANGES = os.path.join(DATA, "changes.json")
 STATUS = os.path.join(DATA, "status.json")
 EXCLUDE = os.path.join(os.path.dirname(DATA), "config", "exclude.txt")
 
+# Markets shown in the "store ships to" filter. A store's full list can run past 200 countries.
+MARKETS = ["US", "CA", "GB", "AU", "NZ", "IE", "DE", "FR", "NL", "ES", "IT", "SE", "IN", "SG", "AE", "ZA", "JP", "MX", "BR"]
+SHOP_RECHECK = timedelta(days=28)
+
 SOFT = {"blocked", "error"}                       # could not read the page: try again next run
 HARD = {"gone", "not_program", "closed", "noindex", "robots", "moved"}
 MAX_FAILS = 6                                     # consecutive failed checks before an entry is retired
 MAX_FRESH_AGE = timedelta(days=16)
-
-_TWO_LEVEL = {"co.uk", "org.uk", "com.au", "net.au", "org.au", "co.nz", "co.za", "com.br", "co.in", "co.jp", "com.sg",
-              "com.mx", "com.hk", "co.il", "com.my", "com.ph", "com.tr", "com.pk", "co.kr", "com.tw", "com.co", "com.ar"}
-
-
-def site_key(host):
-    """Registrable-domain approximation: 'shop.brand.co.uk' -> 'brand.co.uk'."""
-    labels = host.lower().strip(".").split(".")
-    if len(labels) >= 3 and ".".join(labels[-2:]) in _TWO_LEVEL:
-        return ".".join(labels[-3:])
-    return ".".join(labels[-2:])
-
 
 def canonical(url):
     p = urlsplit(url.strip())
@@ -100,10 +93,39 @@ def check_url(client, url):
     if info["noindex"]:
         return {"status": "noindex", "note": info["reason"]}
     if info["closed"]:
-        return {"status": "closed", "note": info["reason"], "info": info}
+        return {"status": "closed", "note": info["reason"]}
     if not info["is_program"]:
         return {"status": "not_program", "note": info["reason"]}
     return {"status": "live", "note": "", "info": info, "final_url": final}
+
+
+def shop_meta(client, page_url):
+    """Read a store's own public summary, /meta.json, which Shopify stores publish: name, country and
+    the countries the store ships to. Robots-checked like every other request.
+
+    Returns a dict, {} when the site publishes no such file, or None when it could not be read now.
+    """
+    host = urlsplit(page_url).hostname
+    try:
+        r = client.get(f"https://{host}/meta.json")
+    except FetchError as e:
+        return {} if e.kind == "robots_disallowed" else None
+    if r.status in (404, 410) or (r.status == 200 and "json" not in r.headers.get("content-type", "").lower()):
+        return {}
+    if r.status != 200:
+        return None
+    try:
+        d = json.loads(r.text())
+    except ValueError:
+        return {}
+    if not isinstance(d, dict) or not isinstance(d.get("name"), str) or not d["name"].strip():
+        return {}
+    ships = [c for c in (d.get("ships_to_countries") or []) if isinstance(c, str)]
+    world = "*" in ships
+    named = [c for c in ships if c != "*"]
+    return {"name": " ".join(d["name"].split())[:60], "country": str(d.get("country") or "")[:2].upper(),
+            "description": str(d.get("description") or "")[:600],
+            "ships_to": [c for c in MARKETS if world or c in named], "ships_world": world, "ships_count": len(named)}
 
 
 def shown(entry, strikes):
@@ -121,10 +143,24 @@ def apply_result(entry, res, now):
     entry["note"] = res.get("note", "")
     if res["status"] == "live":
         info = res["info"]
-        entry.update(
-            url=res["final_url"], host=urlsplit(res["final_url"]).hostname, brand=info["brand"], title=info["title"],
-            types=info["types"], apply=info["apply"], facts=info["facts"], category=info["category"],
-            region=info["region"], lang=info["lang"], verified_at=iso(now), fails=0)
+        host = urlsplit(res["final_url"]).hostname
+        entry.update(url=res["final_url"], host=host, title=info["title"], types=info["types"], apply=info["apply"],
+                     facts=info["facts"], lang=info["lang"], verified_at=iso(now), fails=0)
+        shop = res.get("shop")
+        if shop is not None:                      # the store summary was read (or found absent) in this run
+            entry["shop_checked"] = iso(now)
+            if shop:
+                entry["shop"] = {k: shop[k] for k in ("name", "country", "ships_to", "ships_world", "ships_count")}
+                entry["category"] = classify.categorize(shop["name"], host, info["title"], shop["description"])
+                entry["category_from"] = "store"
+            else:
+                entry.pop("shop", None)
+                entry["category_from"] = "page"
+        store = entry.get("shop") or {}
+        entry["brand"] = store.get("name") or info["brand"]
+        if entry.get("category_from") != "store" or not entry.get("category"):
+            entry["category"], entry["category_from"] = info["category"], "page"
+        entry["region"] = classify.COUNTRY.get(store.get("country", ""), "") or info["region"]
         entry.setdefault("first_seen", iso(now)[:10])
     else:
         entry["fails"] = entry.get("fails", 0) + 1
@@ -149,6 +185,14 @@ def assign_ids(entries):
         taken.add(cand)
 
 
+def read_queue():
+    try:
+        with open(QUEUE, encoding="utf-8") as f:
+            return [line.strip() for line in f if re.match(r"\s*https?://", line)]
+    except FileNotFoundError:
+        return []
+
+
 def run(candidates=None, check_all=False, max_seconds=None, limit=None, private_log=None, now=None, client=None,
         quiet=False):
     cfg = load_config()
@@ -171,7 +215,8 @@ def run(candidates=None, check_all=False, max_seconds=None, limit=None, private_
             work.append(url)
     known = set(entries) | dropped_urls
     new_urls = []
-    for raw in candidates or []:
+    queued = {canonical(u) for u in read_queue()}
+    for raw in list(candidates or []) + sorted(queued):
         raw = raw.strip()
         if not raw or raw.startswith("#"):
             continue
@@ -200,6 +245,13 @@ def run(candidates=None, check_all=False, max_seconds=None, limit=None, private_
                 return
             try:
                 res = check_url(client, u)
+                if res["status"] == "live":
+                    last = parse_iso((entries.get(u) or {}).get("shop_checked"))
+                    if last is None or now - last >= SHOP_RECHECK:
+                        res["shop"] = shop_meta(client, res["final_url"])
+                        shop = res["shop"] or {}
+                        if classify.restricted(shop.get("name", ""), shop.get("description", "")):
+                            res = {"status": "not_program", "note": "age-restricted store or product"}
             except Exception as e:  # one odd page must never stop the run
                 res = {"status": "error", "note": f"{type(e).__name__}"[:80]}
             with lock:
@@ -244,6 +296,12 @@ def run(candidates=None, check_all=False, max_seconds=None, limit=None, private_
             entries.pop(u)
             dropped["dropped"].append({"url": u, "brand": e.get("brand", ""), "reason": e.get("status"),
                                        "note": e.get("note", ""), "dropped_at": iso(now)[:10]})
+    # Pages from the public queue that did not qualify are remembered, so they are not tried every week.
+    for u in sorted(queued):
+        res = results.get(u)
+        if res and res["status"] != "live" and res["status"] not in SOFT:
+            dropped["dropped"].append({"url": u, "brand": "", "reason": res["status"], "note": res.get("note", ""),
+                                       "dropped_at": iso(now)[:10], "candidate": True})
     for d in excluded:
         for u in [u for u, e in entries.items() if site_key(urlsplit(u).hostname or "") == d or urlsplit(u).hostname == d]:
             e = entries.pop(u)
@@ -271,14 +329,19 @@ def run(candidates=None, check_all=False, max_seconds=None, limit=None, private_
 
     after.sort(key=lambda e: ((e.get("brand") or "").lower(), e["url"]))
     write_json(PROGRAMS, {"programs": after, "updated_at": iso(now)})
+    if queued:  # keep only what this run did not get to, or could not read
+        left = sorted(u for u in queued if u not in results or results[u]["status"] in SOFT)
+        with open(QUEUE, "w", encoding="utf-8") as f:
+            f.write("# New program pages to try, one address per line. The weekly check empties this file.\n" + "".join(u + "\n" for u in left))
     dropped["dropped"] = dropped["dropped"][-5000:]
     write_json(DROPPED, dropped)
     changes = read_json(CHANGES, {"runs": []}) or {"runs": []}
     if results:
         changes["runs"].append({
-            "date": iso(now), "checked": len(results), "listed": len(after_shown),
-            "added": [{"brand": e["brand"], "id": e["id"], "types": e["types"], "category": e["category"]} for e in added
-                      if shown(e, strikes)][:400],
+            "date": iso(now), "checked": len(results), "listed": len(after_shown), "launch": not before_shown,
+            "added": [] if not before_shown else [
+                {"brand": e["brand"], "id": e["id"], "types": e["types"], "category": e["category"]} for e in added
+                if shown(e, strikes)][:400],
             "removed": [{"brand": r["brand"], "reason": r["reason"]} for r in removed if r["brand"]][:400]})
         changes["runs"] = changes["runs"][-60:]
         write_json(CHANGES, changes)
@@ -318,10 +381,9 @@ def main(argv=None):
     if a.check_fresh:
         return 0 if check_fresh() else 1
     cands = []
-    for path in filter(None, [a.candidates, os.path.join(DATA, "candidates.txt")]):
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
-                cands += [line for line in f if re.match(r"\s*https?://", line)]
+    if a.candidates:
+        with open(a.candidates, encoding="utf-8") as f:
+            cands = [line for line in f if re.match(r"\s*https?://", line)]
     _, ok = run(candidates=cands, check_all=a.all, max_seconds=a.max_seconds, limit=a.limit, private_log=a.private_log)
     return 0 if ok else 1
 
