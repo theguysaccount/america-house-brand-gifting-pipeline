@@ -11,7 +11,6 @@ on:
   schedule:
     - cron: "23 5 * * 2"   # Tuesday 05:23 UTC
     - cron: "37 5 * * 5"   # Friday 05:37 UTC: the backstop
-    - cron: "13,33,53 * 10,11 11 *"   # TEMPORARY (fires only on 10 and 11 November): proves the schedule trigger; removed after one passing run
   push:
     branches: [main]
     paths-ignore: ["data/**", "**.md", "docs/**", "LICENSE", ".github/ISSUE_TEMPLATE/**"]
@@ -129,12 +128,18 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.again.outputs.page_url }}
     steps:
+      # GitHub Pages sometimes stalls while taking in a build and the step times out. The same build
+      # is offered once more before the run is called failed. Either way the last good site stays live.
       - id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v5
+      - id: again
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v5
 
   after:

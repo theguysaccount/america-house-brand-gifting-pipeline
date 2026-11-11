@@ -9,6 +9,7 @@
   CSV/JSON downloads (CC0); embeddable widget.
 - Crawler that obeys robots.txt and Crawl-delay, stops at bot checks, honours `noindex`, and never submits anything.
 - GitHub Actions: twice-weekly re-check and deploy, weekly self-test with stale-data watchdog, keep-alive. 58 tests.
+  Both scheduled workflows have passed on GitHub's own schedule trigger (first on 2026-11-10), not only by hand.
 
 ## Inherited from the private pipeline (`america-house-form-pipeline`, not in this repository)
 - Reused as ideas, rewritten in Python: robots handling, bot-check detection, form-purpose and route-purpose rules.

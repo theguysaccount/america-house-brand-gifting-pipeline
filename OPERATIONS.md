@@ -16,7 +16,9 @@ normally prevents that. As a backstop every scheduled run calls `.github/scripts
 workflow whose state is `disabled_inactivity` and pushes an empty commit if `main` has been quiet for 45 days.
 
 **GitHub skips scheduled runs on this account.** Nothing depends on a run firing at a set time: there are two weekly slots,
-every run is safe to repeat, and the self-test starts a refresh when the data is stale.
+every run is safe to repeat, and the self-test starts a refresh when the data is stale. The times in the table are the
+earliest a run can start, and a new or changed schedule can take hours to start at all: on 2026-11-10 the first
+scheduled runs of both workflows started about eight hours after their schedules were last pushed. Both passed.
 
 ## What to watch
 
@@ -26,6 +28,8 @@ every run is safe to repeat, and the self-test starts a refresh when the data is
     site-wide block. Re-run it. If it repeats, look at `results` in the log to see which outcome spiked.
   - *Guard* lists each problem (missing page, broken link, a field that should not be public).
   - *Browser check* means the search page did not render what the data says.
+  - *Deploy* timed out: GitHub Pages sometimes stalls while taking in a build. The job offers the same build a second
+    time before failing, and the previous site stays live either way. If both attempts fail, re-run the failed job.
 - **`data/status.json`**: `last_success`, and `last_summary` with the count of each outcome
   (`live`, `blocked`, `gone`, `not_program`, `closed`, `robots`, `noindex`, `moved`, `error`).
   A rising `blocked` count means brand sites are refusing the runner's addresses. Nothing here tries to get around that:
